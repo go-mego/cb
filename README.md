@@ -59,7 +59,7 @@ func main() {
 	m := mego.New()
 	b := cb.New()
 	m.GET("/", func() string {
-		// 可能會發生的錯誤請在 `b.Execute` 中執行。
+		// 可能會發生的錯誤請在 `Execute` 中執行。
 		content, err := b.Execute(func() (interface{}, error) {
 			// 每當接收到錯誤，斷路器會增加一次錯誤紀錄，
 			// 反之，若無錯誤則是增加一次成功紀錄。
