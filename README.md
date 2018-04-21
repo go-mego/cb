@@ -21,27 +21,44 @@ $ go get github.com/go-mego/cb
 
 # 使用方式
 
-要讓程式受到斷路器的保護很簡單，僅需將邏輯移至斷路器的 `Execute` 內執行並確保最終會回傳一個值和錯誤（若無則空）。
+透過 `cb.New` 初始化一個新的斷路器，你能夠建立多個斷路器來保護多個不同的邏輯，但他們也能夠共用同個斷路器。
 
 ```go
 package main
 
 import (
-	"io/ioutil"
-
 	"github.com/go-mego/cb"
-	"github.com/go-mego/mego"
 )
 
 func main() {
-	m := mego.New()
-	// 透過選項來初始化一個斷路器。
-	b := cb.New(cb.Option{
-		Name: "我的斷路器",
+	// 初始化一個斷路器。
+	b := cb.New()
+}
+```
+
+斷路器也可以傳入 `&cb.Options` 來調整進階選項。
+
+```go
+func main() {
+	// 初始化一個斷路器。
+	b := cb.New(&cb.Options{
+		Name: "Global Circuit Breaker",
+		// ...
 	})
-	m.Get("/", func() string {
-		// 可能會發生的錯誤請在 `Execute` 中執行。
-		content, err := cb.Execute(func() (interface{}, error) {
+}
+```
+
+## 保護邏輯
+
+將邏輯移至斷路器的 `Execute` 內執行並確保最終會回傳一個值和錯誤（若無則空）就能讓程式受到斷路器的保護。
+
+```go
+func main() {
+	m := mego.New()
+	b := cb.New()
+	m.GET("/", func() string {
+		// 可能會發生的錯誤請在 `b.Execute` 中執行。
+		content, err := b.Execute(func() (interface{}, error) {
 			// 每當接收到錯誤，斷路器會增加一次錯誤紀錄，
 			// 反之，若無錯誤則是增加一次成功紀錄。
 			return ioutil.ReadFile("/tmp/dat")
@@ -63,11 +80,29 @@ func main() {
 透過 `State` 可以取得斷路器目前的狀態。
 
 ```go
-b := cb.New(cb.Option{
-	// ...
-})
-if b.State() == cb.StateOpen {
-	fmt.Println("斷路器處於開放狀態！請求都會被阻斷！")
+func main() {
+	b := cb.New()
+	if b.State() == cb.StateOpen {
+		fmt.Println("斷路器處於開放狀態！請求都會被阻斷！")
+	} else {
+		fmt.Println("斷路器是關閉狀態。")
+	}
+}
+```
+
+## 手動操作
+
+透過 `Open` 來開啟斷路器，拒絕所有的請求；而 `Close` 可以關閉斷路器讓請求回歸正常執行。
+
+```go
+func main() {
+	b := cb.New()
+	// 手動開啟斷路器，所有允許都會被拒絕。
+	b.Open()
+	fmt.Println(b.State() == cb.StateOpen) // 結果：true
+	// 手動關閉斷路器，這將允許請求執行。
+	b.Close()
+	fmt.Println(b.State() == cb.StateClose) // 結果：true
 }
 ```
 
@@ -76,9 +111,11 @@ if b.State() == cb.StateOpen {
 以 `Name` 來取得斷路器的名稱。
 
 ```go
-b := cb.New(cb.Option{
-	Name: "Database",
-	// ...
-})
-fmt.Println(b.Name()) // 結果：Database
+func main() {
+	b := cb.New(&cb.Option{
+		Name: "Database",
+		// ...
+	})
+	fmt.Println(b.Name()) // 結果：Database
+}
 ```
