@@ -9,8 +9,12 @@ import (
 
 func main() {
 	e := mego.Default()
-	e.GET("/", cb.New(), func(c *mego.Context, cb *cb.Breaker) {
-		c.String(http.StatusInternalServerError, "Internal server error.")
+	b := cb.New()
+	e.GET("/fail", b, func(c *mego.Context, cb *cb.Breaker) {
+		c.String(http.StatusInternalServerError, "%+v, %+v", cb.Counts(), cb.State().String())
+	})
+	e.GET("/success", b, func(c *mego.Context, cb *cb.Breaker) {
+		c.String(http.StatusOK, "%+v, %+v", cb.Counts(), cb.State().String())
 	})
 	e.Run()
 }
