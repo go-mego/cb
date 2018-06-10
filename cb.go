@@ -2,7 +2,6 @@ package cb
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -50,14 +49,11 @@ func New(options ...*Options) mego.HandlerFunc {
 	if o.Name == "" {
 		o.Name = "CircuitBreaker"
 	}
-	if o.MaxRequests == 0 {
-		o.MaxRequests = 1
-	}
 	if o.Timeout.Seconds() == 0 {
-		o.Timeout = time.Second * 60
+		o.Timeout = time.Second * 5
 	}
 	if o.Interval.Seconds() == 0 {
-		o.Interval = time.Second * 60
+		o.Interval = time.Second * 5
 	}
 	if o.OnTrip == nil {
 		o.OnTrip = tripper
@@ -69,43 +65,67 @@ func New(options ...*Options) mego.HandlerFunc {
 		state:   StateClosed,
 	}
 	return func(c *mego.Context) {
-		/*b.check()
+		// 距離上次失敗的時間。
+		duration := time.Since(b.lastFailure)
+		// 如果斷路器是半開放的，且已經沒有錯誤繼續發生就重設斷路器。
+		if b.State() == StateHalfOpen {
+			if b.counts.ConsecutiveFailures == 0 {
+				b.reset()
+			}
+		} else {
+			// 呼叫過路函式，讓開發者決定是否要開啟斷路器。
+			if b.options.OnTrip(c, *b.counts) {
+				b.state = StateOpen
+			}
+		}
+		// 如果斷路器處於開啟狀態。
+		if b.State() == StateOpen {
+			// 要是上次失敗的時間已經超過我們所設定的逾時時間，
+			// 那麼就給斷路器一次機會，回到半開放狀態。
+			if duration >= b.options.Timeout {
+				b.state = StateHalfOpen
+			}
+		}
+		// 如果斷路器處於關閉狀態。
+		if b.State() == StateClosed {
+			// 要是上次失敗的時間已經超過了我們所設定的週期時間，
+			// 那麼就重設斷路器的所有資訊，假裝先前的錯誤不曾發生過。
+			if duration >= b.options.Interval {
+				b.reset()
+			}
+		}
+		// 如果經過前面那些條件，斷路器還是開啟的話就回傳 HTTP 內部伺服器錯誤狀態碼。
 		if b.State() == StateOpen {
 			c.AbortWithError(http.StatusServiceUnavailable, ErrOpenState)
 			return
 		}
-		v := b.options.OnTrip(c, *b.counts)
-		if v {
-			b.Open()
-		}
-		if b.State() == StateOpen {
-			c.AbortWithError(http.StatusServiceUnavailable, ErrOpenState)
-			return
-		}*/
+
 		c.Map(b)
 		c.Next()
+
+		// 當整個路由函式鏈結束時。
 		defer func() {
-			s := c.Writer.Status()
+			// 檢查此路由回傳的狀態碼是否在錯誤狀態碼列表內。
 			for _, v := range b.options.FailureStatuses {
-				if v == s {
-					b.Fail()
+				// 如果回應的狀態碼屬於錯誤狀態碼，就像斷路器表明此次請求失敗並計次遞加。
+				if c.Writer.Status() == v {
+					//b.fail() 會重複與 Execute 發生
 					return
 				}
 			}
+			// 不然就算此次請求成功。
+			b.success()
 		}()
 	}
 }
 
 // tripper 是預設的斷路器裝置，會在連續失敗 5 次後啟動斷路器。
 func tripper(ctx *mego.Context, counts Counts) bool {
-	fmt.Printf("%+v", counts)
-	return counts.ConsecutiveFailures > 5
+	return counts.ConsecutiveFailures >= 5
 }
 
 // Counts 是斷路器的計數狀態。
 type Counts struct {
-	//
-	Requests int
 	// TotalSuccesses 是總共的成功次數。
 	TotalSuccesses int
 	// TotalFailures 是總共的失敗次數。
@@ -116,26 +136,10 @@ type Counts struct {
 	ConsecutiveFailures int
 }
 
-// success 會追加成功次數。
-func (c *Counts) success() {
-	c.TotalSuccesses++
-	c.ConsecutiveSuccesses++
-	c.ConsecutiveFailures = 0
-}
-
-// fail 會追加失敗次數。
-func (c *Counts) fail() {
-	c.TotalFailures++
-	c.ConsecutiveFailures++
-	c.ConsecutiveSuccesses = 0
-}
-
 // Options 是斷路器的選項設置。
 type Options struct {
 	// Name 是斷路器的名稱。
 	Name string
-	// MaxRequests 是斷路器在半開放狀態可允許的最大請求數，當此值為 0 會採用預設值（1）。
-	MaxRequests int
 	// FailureStatuses 是自動失敗 HTTP 狀態碼，當回應的狀態碼於此清單內會自動視為失敗而計次。
 	// `DefaultFailureStatuses` 是預設的 5xx 伺服器錯誤碼清單，若不想使用此功能可傳入 `EmptyFailureStatuses` 空狀態碼清單。
 	FailureStatuses []int
@@ -169,21 +173,32 @@ type Breaker struct {
 
 // Execute 能夠在斷路器中執行函式，
 // 當該函式回傳的 `error` 並非 `nil` 值時，錯誤計次會遞加。
-func (b *Breaker) Execute(fn func() (value interface{}, err error)) (value interface{}, err error) {
-	value, err = fn()
-	if err != nil {
-		b.counts.fail()
-		b.lastFailure = time.Now()
-		return
+// func (b *Breaker) Execute(fn func() (value interface{}, err error)) (value interface{}, err error) {
+// 	if value, err = fn(); err != nil {
+// 		b.fail()
+// 	} else {
+// 		b.success()
+// 	}
+// 	return
+// }
+
+// fail 會追加失敗次數。
+func (b *Breaker) fail() {
+	b.lastFailure = time.Now()
+	b.counts.TotalFailures++
+	b.counts.ConsecutiveFailures++
+	b.counts.ConsecutiveSuccesses = 0
+	// 如果失敗的時候，斷路器處於半開放狀態，那麼就回歸開放狀態拒絕所有請求。
+	if b.State() == StateHalfOpen {
+		b.state = StateOpen
 	}
-	b.counts.success()
-	return
 }
 
-// Fail 表示此次行動失敗，錯誤計次會遞加。
-func (b *Breaker) Fail() {
-	b.counts.fail()
-	b.lastFailure = time.Now()
+// success 會追加成功次數。
+func (b *Breaker) success() {
+	b.counts.TotalSuccesses++
+	b.counts.ConsecutiveSuccesses++
+	b.counts.ConsecutiveFailures = 0
 }
 
 // Open 會直接開啟斷路器拒絕接下來的請求。
@@ -204,27 +219,6 @@ func (b *Breaker) Name() string {
 // State 能夠取得斷路器的目前狀態。
 func (b *Breaker) State() State {
 	return b.state
-}
-
-// check 會在每次經過斷路器時呼叫，這用以基於現在的資訊來作為是否斷路的依據。
-func (b *Breaker) check() {
-	duration := time.Since(b.lastFailure)
-	switch b.state {
-	case StateOpen:
-		if duration >= b.options.Timeout {
-			b.state = StateHalfOpen
-		}
-	case StateHalfOpen:
-		/*if b.counts.ConsecutiveFailures == 0 {
-			b.reset()
-		} else {
-			b.state = StateOpen
-		}*/
-	case StateClosed:
-		if duration >= b.options.Interval {
-			b.reset()
-		}
-	}
 }
 
 // reset 會重設斷路器的資訊。

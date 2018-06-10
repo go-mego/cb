@@ -10,8 +10,7 @@ import (
 func main() {
 	e := mego.Default()
 	e.GET("/", cb.New(), func(c *mego.Context, cb *cb.Breaker) {
-		cb.Fail()
-		c.String(http.StatusOK, "Circuit breaker failed once.")
+		c.String(http.StatusInternalServerError, "Internal server error.")
 	})
 	e.Run()
 }
