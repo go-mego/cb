@@ -66,7 +66,11 @@ func main() {
 func main() {
 	m := mego.New()
 	m.Use(cb.New(&cb.Options{
-		// ...
+		// OnTrip 會在每次經過斷路器時所觸發，此函式會接收上下文建構體與目前的計次狀態。
+		// 當此函式回傳 `true` 時，斷路器就會被開啟而拒絕接下來的請求。
+		OnTrip: func(ctx *mego.Context, counts Counts) bool {
+			return counts.ConsecutiveFailures >= 5
+		},
 	}))
 	m.Run()
 }
