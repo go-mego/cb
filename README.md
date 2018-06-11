@@ -1,4 +1,4 @@
-# Circuit Breaker [![GoDoc](https://godoc.org/github.com/go-mego/cb?status.svg)](https://godoc.org/github.com/go-mego/cb)
+# Circuit Breaker [![GoDoc](https://godoc.org/github.com/go-mego/cb?status.svg)](https://godoc.org/github.com/go-mego/cb) [![Coverage Status](https://coveralls.io/repos/github/go-mego/cb/badge.svg?branch=master)](https://coveralls.io/github/go-mego/cb?branch=master) [![Build Status](https://travis-ci.org/go-mego/cb.svg?branch=master)](https://travis-ci.org/go-mego/cb) [![Go Report Card](https://goreportcard.com/badge/github.com/go-mego/cb)](https://goreportcard.com/report/github.com/go-mego/cb)
 
 Circuit Breaker 是基於斷路器理念用以防止錯誤不斷地發生的套件。當函式發生錯誤到一定的次數（或比例）就會直接斷路並回傳錯誤訊息，而不是嘗試執行可能發生錯誤的函式以防浪費資源。
 
@@ -8,7 +8,7 @@ Circuit Breaker 是基於斷路器理念用以防止錯誤不斷地發生的套�
 
 * [安裝方式](#安裝方式)
 * [使用方式](#使用方式)
-    * [保護邏輯](#保護邏輯)
+    * [保護與設置](#保護與設置)
 	* [取得狀態](#取得狀態)
 	* [手動操作](#手動操作)
 	* [取得名稱](#取得名稱)
@@ -23,7 +23,9 @@ $ go get github.com/go-mego/cb
 
 # 使用方式
 
-透過 `cb.New` 初始化一個新的斷路器，你能夠建立多個斷路器來保護多個不同的邏輯，但他們也能夠共用同個斷路器。
+將 `cb.New` 傳入 Mego 引擎的 `Use` 就能夠作為全域中介軟體，這會讓所有路由共享同一個斷路器。
+
+當任何一個路由持續出錯時，所有路由都會被斷路保護。
 
 ```go
 package main
@@ -33,46 +35,39 @@ import (
 )
 
 func main() {
-	// 初始化一個斷路器。
-	b := cb.New()
+	m := mego.New()
+	// 將 Circuit Breaker 作為全域中介軟體即能在不同路由中使用同個斷路器。
+	// 當任何一個路由持續出錯時，所有路由都會被斷路保護。
+	m.Use(cb.New())
+	m.Run()
 }
 ```
 
-斷路器也可以傳入 `&cb.Options` 來調整進階選項。
-
-```go
-func main() {
-	// 初始化一個斷路器。
-	b := cb.New(&cb.Options{
-		Name: "Global Circuit Breaker",
-		// ...
-	})
-}
-```
-
-## 保護邏輯
-
-將邏輯移至斷路器的 `Execute` 內執行並確保最終會回傳一個值和錯誤（若無則空）就能讓程式受到斷路器的保護。
+Circuit Breaker 也可以獨立用於每個路由，這樣每個路由都有自己的斷路器保護機制。
 
 ```go
 func main() {
 	m := mego.New()
-	b := cb.New()
-	m.GET("/", func() string {
-		// 可能會發生的錯誤請在 `Execute` 中執行。
-		content, err := b.Execute(func() (interface{}, error) {
-			// 每當接收到錯誤，斷路器會增加一次錯誤紀錄，
-			// 反之，若無錯誤則是增加一次成功紀錄。
-			return ioutil.ReadFile("/tmp/dat")
-		})
-		// 當斷路器啟動時，`err` 會直接回傳 `cb.ErrOpenState` 且其中程式不會被執行。
-		// 而這錯誤也有可能是程式內所回傳的錯誤資料。
-		if err != nil {
-			return err.Error()
-		}
-		// 如果無任何錯誤就可以正常繼續執行。
-		return string(content.([]byte))
+	// 也可以僅將 Circuit Breaker 傳入單個路由中使用。
+	m.GET("/", cb.New(), func(c *cb.Crypt) {
+		// ...
 	})
+	m.Run()
+}
+```
+
+## 保護與設置
+
+斷路器是主動式的。當請求回應錯誤狀態碼時，斷路器會將該請求視為伺服器錯誤而計次。當錯誤至少五次時，斷路器就會開啟並在接下來的 60 秒內拒絕請求，之後會呈現半開放的狀態讓客戶端可重新嘗試執行動作。
+
+如果你希望自訂這背後的行為，在建立斷路器時可以傳入 `&cb.Options` 設置。
+
+```go
+func main() {
+	m := mego.New()
+	m.Use(cb.New(&cb.Options{
+		// ...
+	}))
 	m.Run()
 }
 ```
