@@ -32,6 +32,7 @@ package main
 
 import (
 	"github.com/go-mego/cb"
+	"github.com/go-mego/mego"
 )
 
 func main() {
